@@ -45,7 +45,7 @@ namespace WhackAMole
             while (IsPlaying)
             {
                 yield return board.Moles[index].Appear(rules.transitionSeconds, rules.upSeconds);
-                index = (index + 1) % board.Moles.Length;
+                index = UnityEngine.Random.Range(0, board.Moles.Length); //(index + 1) % board.Moles.Length;
                 yield return new WaitForSeconds(rules.intervalSeconds);
             }
         }
