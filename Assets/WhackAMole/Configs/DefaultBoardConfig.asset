@@ -12,8 +12,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: c64839c627984a14a00c33ae8be7eb5b, type: 3}
   m_Name: DefaultBoardConfig
   m_EditorClassIdentifier: 
-  rows: 4
-  columns: 4
+  rows: 5
+  columns: 5
   spacing: {x: 2.5, y: 2}
   center: {x: 0, y: 0}
   gameSeconds: 30
