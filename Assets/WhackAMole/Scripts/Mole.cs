@@ -17,19 +17,21 @@ namespace WhackAMole
 
         private int hp = 2;
 
-        // 연출용 변수 추가
         [Header("Death Animation Settings")]
-        [Min(0.1f)] public float deathDuration = 0.4f; // 연출 총 시간
-        public float maxScaleMultiplier = 1.4f;       // 커졌을 때 최대 크기 배율
-        public float totalRotationAngle = 360f;        // 회전할 총 각도 (360도 = 1바퀴)
+        [Min(0.1f)] public float deathDuration = 0.4f;
+        public float maxScaleMultiplier = 1.4f;
+        public float totalRotationAngle = 360f;
+        private Vector3 originalScale;
 
-        private Vector3 originalScale;                 // 두더지의 원래 스케일 저장
+        [Header("Evasion Settings (New)")]
+        public bool isEvasive = false;   // 이번에 나타난 두더지가 '회피형'인지 여부
+        public int gridIndex = 0;        // 현재 보드판에서의 인덱스 위치 기억
 
         private void Awake()
         {
             visual = GetComponent<SpriteRenderer>();
             hitbox = GetComponent<Collider2D>();
-            originalScale = transform.localScale; // 게임 시작 시 원래 크기 기억
+            originalScale = transform.localScale;
             Hide();
         }
 
@@ -43,16 +45,22 @@ namespace WhackAMole
 
         public void Hide()
         {
-            // 숨을 때는 크기와 회전값을 원래대로 초기화
             transform.localScale = originalScale;
             transform.localRotation = Quaternion.identity;
             Show(MoleState.Hidden, idleSprite, false);
         }
 
+        // Setup 메서드를 통해 등장할 때 특성을 부여합니다.
+        public void Setup(int index, bool evasive)
+        {
+            gridIndex = index;
+            isEvasive = evasive;
+            hp = isEvasive ? 1 : 2; // 회피형 두더지는 체력 1, 일반은 2
+        }
+
         public IEnumerator Appear(float transition, float duration)
         {
-            hp = 2;
-            // 다시 나타날 때 스케일/회전 리셋 확인
+            // 나타날 때 기본 위치의 로컬 포지션으로 리셋 (순간이동했다가 복귀 대비)
             transform.localScale = originalScale;
             transform.localRotation = Quaternion.identity;
 
@@ -63,7 +71,6 @@ namespace WhackAMole
 
             while (State == MoleState.Up && hp > 0 && Time.time < end) yield return null;
 
-            // 만약 체력이 다 닳아서 죽은 거라면, 일반 Falling 과정을 거치지 않고 종료 (Appear 루틴 내부 탈출)
             if (State == MoleState.Hit)
             {
                 yield break;
@@ -74,9 +81,36 @@ namespace WhackAMole
             Hide();
         }
 
+        // 2D 콜라이더에 마우스가 닿았을 때 자동으로 호출되는 유니티 이벤트 함수
+        private void OnMouseEnter()
+        {
+            if (State == MoleState.Up && isEvasive)
+            {
+                TriggerEvasion();
+            }
+        }
+
+        // 도망치기(순간이동) 핵심 로직
+        public void TriggerEvasion()
+        {
+            // 게임 매니저에게 상하좌우 비어있는 좌표를 요청하여 순간이동
+            GameManager gm = FindFirstObjectByType<GameManager>();
+            if (gm != null)
+            {
+                gm.TryEadeMole(this);
+            }
+        }
+
         public bool TryHit()
         {
             if (State != MoleState.Up || hp <= 0) return false;
+
+            // 회피형 두더지인데 클릭을 당했다면 도망치기를 시도합니다.
+            if (isEvasive)
+            {
+                TriggerEvasion();
+                return false; // 죽지 않고 도망쳤으므로 false 반환
+            }
 
             hp--;
             onHit.Invoke();
@@ -84,7 +118,6 @@ namespace WhackAMole
             if (hp <= 0)
             {
                 Show(MoleState.Hit, hitSprite, false);
-                // 사망 시 크기가 변하며 뱅글뱅글 도는 연출 루틴 실행
                 StartCoroutine(PlayDeathAnimation());
                 return true;
             }
@@ -92,38 +125,18 @@ namespace WhackAMole
             return false;
         }
 
-        // 사망 연출 코루틴
         private IEnumerator PlayDeathAnimation()
         {
             float elapsed = 0f;
-
             while (elapsed < deathDuration)
             {
                 elapsed += Time.deltaTime;
-                float t = elapsed / deathDuration; // 0에서 1까지 진행률
-
-                // 1. 크기 변화 연출 (Sin 그래프 활용: 원래 크기 -> 커졌다가 -> 0으로 수렴)
-                float scaleProgress;
-                if (t < 0.3f)
-                {
-                    // 초반 30% 동안 원래 크기(1)에서 최대 크기로 증가
-                    scaleProgress = Mathf.Lerp(1f, maxScaleMultiplier, t / 0.3f);
-                }
-                else
-                {
-                    // 나머지 70% 동안 최대 크기에서 0(사라짐)으로 감소
-                    scaleProgress = Mathf.Lerp(maxScaleMultiplier, 0f, (t - 0.3f) / 0.7f);
-                }
+                float t = elapsed / deathDuration;
+                float scaleProgress = (t < 0.3f) ? Mathf.Lerp(1f, maxScaleMultiplier, t / 0.3f) : Mathf.Lerp(maxScaleMultiplier, 0f, (t - 0.3f) / 0.7f);
                 transform.localScale = originalScale * scaleProgress;
-
-                // 2. 비틀림 회전 연출 (Z축 기준 뱅글뱅글)
-                float currentAngle = t * totalRotationAngle;
-                transform.localRotation = Quaternion.Euler(0f, 0f, currentAngle);
-
+                transform.localRotation = Quaternion.Euler(0f, 0f, t * totalRotationAngle);
                 yield return null;
             }
-
-            // 연출이 완전히 끝나면 최종 숨기기 및 리셋
             Hide();
         }
     }

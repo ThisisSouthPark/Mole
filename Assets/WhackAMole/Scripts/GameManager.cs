@@ -1,6 +1,6 @@
 using System;
 using System.Collections;
-using UnityEditor.Rendering.LookDev;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace WhackAMole
@@ -23,14 +23,17 @@ namespace WhackAMole
         private Coroutine sequence;
         private BoardConfig rules;
 
+        [Header("Evasive Mole Settings")]
+        [Range(0f, 1f)] public float evasiveProbability = 0.3f; // 30% 확률로 회피형 두더지 등장
+
         private void Start() { if (autoStart) StartGame(); }
+
         public void StartGame()
         {
             StopAllCoroutines();
             IsPlaying = false;
             if (!board || !board.Build()) { Debug.LogError("Board, Config, Mole Prefab을 연결하세요.", this); return; }
             if (rules) Destroy(rules);
-            // Freeze rules for this round; config edits apply at the next start.
             rules = Instantiate(board.config);
             Hits = Misses = Score = 0;
             Remaining = rules.gameSeconds;
@@ -40,60 +43,93 @@ namespace WhackAMole
             Changed?.Invoke();
             sequence = StartCoroutine(Sequence());
         }
+
         private IEnumerator Sequence()
         {
             int index = 0;
             while (IsPlaying)
             {
+                // 등장할 때 랜덤 확률로 회피형 두더지 설정 (예: 30% 확률)
+                bool isEvasive = UnityEngine.Random.value < evasiveProbability;
+                board.Moles[index].Setup(index, isEvasive);
+
                 yield return board.Moles[index].Appear(rules.transitionSeconds, rules.upSeconds);
-                index = UnityEngine.Random.Range(0, board.Moles.Length); //(index + 1) % board.Moles.Length;
+                index = UnityEngine.Random.Range(0, board.Moles.Length);
                 yield return new WaitForSeconds(rules.intervalSeconds);
             }
-        }
-        private void Update()
-        {
-            if (!IsPlaying) return;
-            Remaining = Mathf.Max(0, Remaining - Time.deltaTime);
-            if (Remaining <= 0) EndGame();
-            else Changed?.Invoke();
         }
 
         public void Attempt(Mole target)
         {
             if (!IsPlaying || Remaining <= 0) return;
 
-            // 두더지가 지상에 있고 타격 가능한 상태일 때
             if (target && target.State == MoleState.Up)
             {
-                // 타격 성공 시 매번 카메라 흔들기 실행 (기본값: 0.15초 동안 0.2 세기로)
                 if (CameraShake.Instance != null)
                 {
                     CameraShake.Instance.Shake(0.15f, 0.2f);
                 }
 
-                // 체력 깎기 실행 (이전 답변 코드 참고)
                 bool isDead = target.TryHit();
 
-                // 점수 및 타격 횟수 증가
-                Hits++;
-                Score += rules.pointsPerHit;
+                // 도망치지 않고 실제로 맞아서 체력이 깎였거나(일반 두더지) 죽었을 때만 점수 획득
+                if (!target.isEvasive)
+                {
+                    Hits++;
+                    Score += rules.pointsPerHit;
+                }
             }
             else
             {
-                // 허공을 쳤거나 이미 들어가는 두더지를 친 경우
                 Misses++;
             }
             Changed?.Invoke();
         }
 
-        /*public void Attempt(Mole target)
+        /// <summary>
+        /// 회피형 두더지가 상하좌우 인접한 칸 중 비어있는 곳으로 순간이동하도록 처리합니다.
+        /// </summary>
+        public void TryEadeMole(Mole mole)
         {
-            if (!IsPlaying || Remaining <= 0) return;
-            if (target && target.TryHit()) { Hits++; Score += rules.pointsPerHit; }
-            else Misses++;
-            Changed?.Invoke();
-        }*/
+            int r = rules.rows;
+            int c = rules.columns;
+            int curIndex = mole.gridIndex;
 
+            int curRow = curIndex / c;
+            int curCol = curIndex % c;
+
+            // 상하좌우 탐색 레이아웃 생성
+            List<int> neighbors = new List<int>();
+            if (curRow > 0) neighbors.Add(curIndex - c); // 상
+            if (curRow < r - 1) neighbors.Add(curIndex + c); // 하
+            if (curCol > 0) neighbors.Add(curIndex - 1); // 좌
+            if (curCol < c - 1) neighbors.Add(curIndex + 1); // 우
+
+            // 현재 다른 두더지가 튀어나와 있거나(Up/Rising), 예약되지 않은 비어있는 인덱스 필터링
+            List<int> validIndices = new List<int>();
+            foreach (int nIndex in neighbors)
+            {
+                if (board.Moles[nIndex].State == MoleState.Hidden)
+                {
+                    validIndices.Add(nIndex);
+                }
+            }
+
+            // 도망칠 빈 구멍이 있다면 위치 이동
+            if (validIndices.Count > 0)
+            {
+                int targetIndex = validIndices[UnityEngine.Random.Range(0, validIndices.Count)];
+
+                // 1. 기존 구멍의 상태를 숨김 처리
+                mole.Hide();
+
+                // 2. 새로운 구멍의 두더지 객체를 가져와 스왑하거나, 
+                // 간단히 현재 두더지의 물리적 위치를 해당 빈 칸의 좌표로 변경하고 상태를 유지합니다.
+                mole.transform.localPosition = board.LocalPositions[targetIndex];
+                mole.Setup(targetIndex, true); // 새 위치 인덱스로 리셋
+                mole.StartCoroutine(mole.Appear(0f, rules.upSeconds * 0.7f)); // 즉시 튀어나옴 (남은시간 살짝 보정)
+            }
+        }
 
         public void EndGame()
         {
